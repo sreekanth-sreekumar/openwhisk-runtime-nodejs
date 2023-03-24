@@ -43,13 +43,16 @@ ext {
     dockerRegistry = project.hasProperty('dockerRegistry') ? dockerRegistry + '/' : ''
     dockerImageTag = project.hasProperty('dockerImageTag') ? dockerImageTag : 'latest'
     dockerImagePrefix = project.hasProperty('dockerImagePrefix') ? dockerImagePrefix : 'whisk'
-    dockerImageSuffix = project.hasProperty('dockerImageSuffix') ? dockerImageSuffix : ''
     dockerTimeout = project.hasProperty('dockerTimeout') ? dockerTimeout.toInteger() : 840
     dockerRetries = project.hasProperty('dockerRetries') ? dockerRetries.toInteger() : 3
     dockerBinary = project.hasProperty('dockerBinary') ? [dockerBinary] : ['docker']
-    dockerBuildArg = ['build']
+    dockerPlatform = project.hasProperty('projectPlatform') ? projectPlatform : 'linux/amd64'
+    dockerBuildArg = ['buildx', 'build']
+    dockerPlatformArg = ['--platform'] + [dockerPlatform]
+    dockerDockerfileSuffix = ""
 }
-ext.dockerTaggedImageName = dockerRegistry + dockerImagePrefix + '/' + dockerImageName + dockerImageSuffix + ':' + dockerImageTag
+ext.dockerTaggedImageName = dockerRegistry + dockerImagePrefix + '/' + dockerImageName + ':' + dockerImageTag
+ext.dockerRegisteredImageName = dockerRegistry + dockerImageName + ':' + dockerImageTag
 
 if(project.hasProperty('dockerHost')) {
     dockerBinary += ['--host', project.dockerHost]
@@ -64,36 +67,44 @@ if(project.hasProperty('dockerBuildArgs')) {
 task distDocker {
     doLast {
         def start = new Date()
-        def cmd = dockerBinary + dockerBuildArg + ['-t', dockerImageName + dockerImageSuffix, project.buildscript.sourceFile.getParentFile().getAbsolutePath()]
-        retry(cmd, dockerRetries, dockerTimeout)
-        println("Building '${dockerImageName + dockerImageSuffix}' took ${TimeCategory.minus(new Date(), start)}")
-    }
-}
-task tagImage {
-    doLast {
-        def versionString = (dockerBinary + ['-v']).execute().text
-        def matched = (versionString =~ /(\d+)\.(\d+)\.(\d+)/)
-
-        def major = matched[0][1] as int
-        def minor = matched[0][2] as int
-
-        def dockerCmd = ['tag']
-        if(major == 1 && minor < 12) {
-            dockerCmd += ['-f']
+        String dockerFileDir = project.buildscript.sourceFile.getParentFile().getAbsolutePath()
+        String dockerFile = dockerFileDir + "/Dockerfile" + dockerDockerfileSuffix
+        if (!new File(dockerFile).exists()){
+            println("Using default Dockerfile since '${dockerFile}' does not exist")
+            dockerFile = dockerFileDir + "/Dockerfile"
         }
-        retry(dockerBinary + dockerCmd + [dockerImageName + dockerImageSuffix, dockerTaggedImageName], dockerRetries, dockerTimeout)
+        def cmd = dockerBinary + dockerBuildArg + dockerPlatformArg + ['--push'] + ['-f', dockerFile] +
+                ['-t', dockerRegisteredImageName, project.buildscript.sourceFile.getParentFile().getAbsolutePath()]
+        retry(cmd, dockerRetries, dockerTimeout)
+        println("Building '${dockerImageName}' took ${TimeCategory.minus(new Date(), start)}")
     }
 }
 
-task pushImage {
-    doLast {
-        def cmd = dockerBinary + ['push', dockerTaggedImageName]
-        retry(cmd, dockerRetries, dockerTimeout)
-    }
-}
-pushImage.dependsOn tagImage
-pushImage.onlyIf { dockerRegistry != '' }
-distDocker.finalizedBy pushImage
+//task tagImage {
+//    doLast {
+//        def versionString = (dockerBinary + ['-v']).execute().text
+//        def matched = (versionString =~ /(\d+)\.(\d+)\.(\d+)/)
+//
+//        def major = matched[0][1] as int
+//        def minor = matched[0][2] as int
+//
+//        def dockerCmd = ['tag']
+//        if(major == 1 && minor < 12) {
+//            dockerCmd += ['-f']
+//        }
+//        retry(dockerBinary + dockerCmd + [dockerImageName + dockerImageSuffix, dockerTaggedImageName], dockerRetries, dockerTimeout)
+//    }
+//}
+//
+//task pushImage {
+//    doLast {
+//        def cmd = dockerBinary + ['push', dockerTaggedImageName]
+//        retry(cmd, dockerRetries, dockerTimeout)
+//    }
+//}
+//pushImage.dependsOn tagImage
+//pushImage.onlyIf { dockerRegistry != '' }
+//distDocker.finalizedBy pushImage
 
 def retry(cmd, retries, timeout) {
     println("${new Date()}: Executing '${cmd.join(" ")}'")
